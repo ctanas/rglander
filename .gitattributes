@@ -1,0 +1,4 @@
+# Keep LF everywhere: the PortMaster launcher and build.sh must run on Linux.
+* text=auto eol=lf
+
+*.png binary
