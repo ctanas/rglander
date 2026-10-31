@@ -20,6 +20,7 @@ function S.load()
   if not love.filesystem.getInfo(FILE) then return end
   local ok, content = pcall(love.filesystem.read, FILE)
   if not ok or type(content) ~= "string" then return end
+  S.fromFile = true   -- the player has saved settings; don't apply first-run defaults
   for line in content:gmatch("[^\r\n]+") do
     local k, v = line:match("^([%w_]+)%s*=%s*(.-)%s*$")
     if k then

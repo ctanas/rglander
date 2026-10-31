@@ -1,7 +1,7 @@
 # RG Lander
 
 A vector-graphics landing game for LÖVE 11, made for the **Anbernic RG34XXSP**
-(720×480, Allwinner H700, PortMaster). It is an original game in the classic
+(720×480, Allwinner H700), packaged for both muOS and PortMaster. It is an original game in the classic
 lunar-lander genre: monochrome phosphor lines on black, jagged procedural
 terrain, narrow pads that pay more, and fuel as your only life.
 
@@ -13,18 +13,37 @@ terrain, narrow pads that pay more, and fuel as your only life.
 *Screenshots are rendered by the game itself at native 720×480 (`--shot`). The
 green phosphor option is shown in [mars_green.png](screenshots/mars_green.png).*
 
-## Running
+## Install
 
-| Where | How |
-|---|---|
-| Desktop | `love .` (LÖVE 11.4/11.5) |
-| Any LÖVE | `./build.sh`, then `love dist/rglander.love` |
-| RG34XXSP | download `rglander_v*_portmaster.zip` from Releases (or run `./build.sh`), unzip it into the SD card's `ports/` folder (it contains `RG Lander.sh` and `rglander/`), refresh the game list, and launch **RG Lander** from Ports |
+Download a package from [Releases](https://github.com/ctanas/rglander/releases),
+or build them all with `./build.sh` (output in `dist/`).
+
+### muOS (MustardOS)
+
+1. Copy `RGLander_vX.Y.Z.muxapp` to `/mnt/mmc/MUOS/ARCHIVE/` on the SD card.
+2. On the device, open **Applications → Archive Manager** and install it.
+3. Launch **RG Lander** from Applications.
+
+The muxapp is self-contained: it bundles an aarch64 LÖVE 11.5 runtime, since
+muOS doesn't include LÖVE. Settings and high scores are stored in
+`MUOS/application/RGLander/.game/save/`. If the game doesn't start, check
+`MUOS/application/RGLander/.game/rglander.log`.
+
+### PortMaster (Knulli, ROCKNIX, stock OS, ...)
+
+Unzip `rglander_vX.Y.Z_portmaster.zip` into the SD card's `ports/` folder. You
+should get `RG Lander.sh` and `rglander/`. Refresh the game list, then launch
+**RG Lander** from Ports.
 
 The launcher uses PortMaster's `love_11.5` runtime. If you have never installed
 a LÖVE-based port, install that runtime from PortMaster first, or the launcher
 will show a message and exit. Logs go to `ports/rglander/log.txt`, and
 settings and high scores to `ports/rglander/conf/`.
+
+### PC
+
+`./build.sh run`, or `love .` from this folder (LÖVE 11.4/11.5). The packaged
+game alone is `rglander.love`: `love rglander.love`.
 
 ## Controls
 
@@ -78,7 +97,8 @@ Everything is in SI units, integrated at a fixed 120 Hz (semi-implicit Euler).
   Warnings blink instead of changing colour, as on a monochrome vector monitor.
 - **4:3 option.** Some reviewers say the RG34XXSP panel is physically 4:3 with
   non-square pixels. If the planet in the sky looks oval, set *Options → Screen → 4:3*.
-  The game then renders at 640×480 and stretches it to fill the panel.
+  The game then renders at 640×480 and stretches it to fill the panel. The first
+  time it runs on a 640×480 handheld (such as the RG35XX family), it picks 4:3 itself.
 - **Camera.** It keeps the lander and the ground beneath it in frame, and zooms
   smoothly from 1.5 to 6 px/m as you descend. The lander art never drops below
   2.6 px/m on screen, so it stays readable at high altitude. Edge markers point
@@ -93,7 +113,16 @@ Everything is in SI units, integrated at a fixed 120 Hz (semi-implicit Euler).
 ## Development
 
 ```sh
-love . --autotest 40                      # headless: autopilot flies 40 sorties per world
+./build.sh                # all packages: dist/rglander.love, *_portmaster.zip, *.muxapp
+./build.sh muos           # just the muxapp (also: portmaster, love)
+./build.sh test 40        # headless self-test: autopilot flies 40 sorties per world
+./build.sh run            # play on this PC
+```
+
+The version comes from `VERSION` in `src/core.lua`. The game's developer flags:
+
+```sh
+love . --autotest 40                      # same as ./build.sh test 40
 love . --shot NAME --mode game --world 3 --time 20 --turbo 4 --seed 9
                                           # saves NAME.png to the LÖVE save dir
                                           # modes: title options howto game crash pause gameover
@@ -113,12 +142,24 @@ src/title.lua   menus, options, how-to, attract mode
 src/worlds.lua  world data and schematic sky objects
 src/scene.lua   stars, terrain and pad drawing
 src/particles.lua, glow.lua, audio.lua, vfont.lua, input.lua, settings.lua, core.lua
+muos/           muOS launcher (mux_launch.sh), app name and help text, glyph icon
 port/           PortMaster launcher
+build.sh        build, test and run commands
 ```
+
+### The LÖVE runtime in the muxapp
+
+As in rgTrek, `build.sh` takes an aarch64 LÖVE 11.5 build (`bin/love` and
+`bin/libs.aarch64/`) from [2048 Plus](https://github.com/saitamasahil/2048plus)
+(MIT licensed) at a pinned tag, because that runtime is known to work on muOS H700
+devices. It is cached in `~/.cache/rglander/`. To use a different runtime, set
+`LOVE_RUNTIME=/path/to/dir` containing `love` and `libs.aarch64/`.
 
 ## Credits and licenses
 
 - Game code: MIT (see `LICENSE`)
 - All graphics, the stroke font and all sounds are generated by the code; there are no third-party assets
 - LÖVE: zlib license
-- Launcher structure: the standard PortMaster LÖVE port template
+- muOS launcher structure and aarch64 runtime: 2048 Plus by saitamasahil (MIT),
+  by way of rgTrek
+- PortMaster launcher: the standard PortMaster LÖVE port template

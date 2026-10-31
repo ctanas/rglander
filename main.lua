@@ -68,13 +68,27 @@ function app.startGame(demo, worldIndex)
   })
 end
 
+-- A "WxH" argument (passed by the muOS launcher) gives the screen size.
+local function resolutionArg(args)
+  for _, a in ipairs(args) do
+    local w, h = tostring(a):match("^(%d+)x(%d+)$")
+    if w then return tonumber(w), tonumber(h) end
+  end
+end
+
 local function setupWindow(args)
   local device = os.getenv("RGLANDER_DEVICE") == "1" or hasArg(args, "--fullscreen")
   local dw, dh = love.window.getDesktopDimensions()
   if dw <= 1024 and dh <= 768 then device = true end
+  local rw, rh = resolutionArg(args)
+  if rw then device = true end
   if hasArg(args, "--windowed") or shot then device = false end
   core.device = device
-  if device then
+  if device and rw then
+    -- muOS: a window the size of the screen (the rgTrek / 2048 Plus setup)
+    love.window.setMode(rw, rh, { vsync = 1 })
+    love.mouse.setVisible(false)
+  elseif device then
     love.window.setMode(0, 0, { fullscreen = true, fullscreentype = "desktop", vsync = 1 })
     love.mouse.setVisible(false)
   elseif not shot then
@@ -149,6 +163,10 @@ function love.load(args)
   lg.setLineStyle("smooth")
   lg.setLineJoin("bevel")
   core.setPhosphor(settings.data.phosphor)
+  if core.device and not settings.fromFile then
+    local w, h = lg.getDimensions()
+    if w / h < 1.4 then settings.data.aspect = 2 end
+  end
   core.setAspect(settings.data.aspect)
   input.init(settings.data.swapab)
   audio.init(settings.data.sound and not shot)
