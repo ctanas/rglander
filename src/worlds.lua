@@ -1,5 +1,11 @@
 -- Landing sites. Gravity and surface air density are real values; the
 -- lander's engine is sized per world (see game.lua) so each one is flyable.
+--
+-- R is the body's radius *for orbital flight in arcade mode*. Real radii
+-- would need ~1.7 km/s to orbit the Moon, far beyond the lander's ~0.8 km/s,
+-- so (as in Kerbal Space Program) the bodies are scaled down while keeping
+-- their real surface gravity. H is the atmosphere's scale height: air
+-- density falls as exp(-altitude / H).
 
 local core = require("src.core")
 local lg = love.graphics
@@ -104,6 +110,7 @@ return {
     id = "moon", name = "MOON",
     g = 1.62, rho = 0, wind = 0, gust = 0,
     fuel = 1000, relief = 110, rough = 0.56, craters = 4,
+    R = 35000,                    -- real: 1,737 km
     pads = { 2, 2, 3, 4, 5 },
     stars = 1.0, sky = earth, skyR = 16,
     atmo = "NO ATMOSPHERE",
@@ -113,6 +120,7 @@ return {
     id = "mars", name = "MARS",
     g = 3.71, rho = 0.020, wind = 8, gust = 10,
     fuel = 1500, relief = 125, rough = 0.5, craters = 2,
+    R = 25000, H = 1000,          -- real: 3,390 km
     pads = { 2, 3, 3, 4, 5 },
     stars = 0.6, sky = marsMoons, skyR = 9,
     atmo = "THIN CO2 AIR 0.020 KG/M3",
@@ -122,6 +130,7 @@ return {
     id = "titan", name = "TITAN",
     g = 1.35, rho = 5.3, wind = 1.5, gust = 2.5,
     fuel = 900, relief = 70, rough = 0.42, craters = 0,
+    R = 45000, H = 400,           -- real: 2,575 km
     pads = { 2, 2, 3, 4, 5 },
     stars = 0.25, sky = saturn, skyR = 13,
     atmo = "DENSE N2 AIR 5.3 KG/M3",
@@ -131,6 +140,7 @@ return {
     id = "ceres", name = "CERES",
     g = 0.28, rho = 0, wind = 0, gust = 0,
     fuel = 600, relief = 140, rough = 0.6, craters = 5,
+    R = 100000,                   -- real: 470 km
     pads = { 2, 3, 4, 5, 5 },
     stars = 1.0, sky = sun, skyR = 5,
     atmo = "NO ATMOSPHERE",

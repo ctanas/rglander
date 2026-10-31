@@ -6,6 +6,7 @@
 --
 -- Developer flags:
 --   --autotest N            headless: fly N autopilot sorties per world
+--   --autotest-missions N   headless: autopilot flies N contracts per world
 --   --shot NAME --mode M    render mode M (title|options|howto|game) and
 --     [--time S] [--world W]  save NAME.png to the save directory after S s
 --   --windowed / --fullscreen
@@ -16,6 +17,7 @@ local input = require("src.input")
 local audio = require("src.audio")
 local worlds = require("src.worlds")
 local Game = require("src.game")
+local Mission = require("src.mission")
 
 local lg = love.graphics
 local glow, Title, vfont
@@ -76,6 +78,14 @@ local function resolutionArg(args)
   end
 end
 
+function app.startMission(resume, worldIndex)
+  local d = settings.data
+  state = Mission.new({
+    world = worldIndex or d.world, rating = d.rating,
+    assisted = d.attitude == 1, resume = resume, app = app,
+  })
+end
+
 local function setupWindow(args)
   local device = os.getenv("RGLANDER_DEVICE") == "1" or hasArg(args, "--fullscreen")
   local dw, dh = love.window.getDesktopDimensions()
@@ -124,6 +134,58 @@ local function runAutotest(n)
   end
 end
 
+-- Fly contracts with the autopilot: HQ -> outpost -> HQ, refuel, repeat.
+local function runMissionAutotest(n)
+  local max, floor = math.max, math.floor
+  print(string.format("mission autotest: %d contracts per world (PILOT, autopilot)", n))
+  for wi, w in ipairs(worlds) do
+    local m = Mission.new({ world = wi, rating = 2, assisted = true, app = app })
+    m.autopilotOn = true
+    local delivered, crashed, stuck, late, legT, legFuel, pay = 0, 0, 0, 0, 0, 0, 0
+    local hard = 0
+    for k = 1, n do
+      -- docked at HQ: refuel, repair, take the k-th offer, launch
+      m:refuel(); m:repair()
+      local offer = m.offers[(k - 1) % #m.offers + 1]
+      local credits0 = m.credits
+      m:accept(offer)
+      m:launch()
+      m.apPad, m.apFinal = offer.base, false
+      local fuel0, t = m.fuel, 0
+      while m.contract and m.phase ~= "crashed" and t < 600 do m:update(1 / 120); t = t + 1 / 120 end
+      if m.phase == "crashed" then
+        crashed = crashed + 1
+        print("   crash: " .. m.result.sub .. " (to " .. offer.base.name .. ")")
+        m:replaceLander()
+      elseif m.contract then
+        stuck = stuck + 1
+        m.contract = nil
+        m:rescue()
+      else
+        delivered = delivered + 1
+        legT, legFuel, pay = legT + t, legFuel + (fuel0 - m.fuel), pay + (m.credits - credits0)
+        if m.toast and m.toast.sub:match("^HARD") then hard = hard + 1 end
+        if m.toast then for _, l in ipairs(m.toast.lines) do if l:match("^LATE") then late = late + 1 end end end
+        -- fly home
+        m.apPad, m.apFinal = m.hq, false
+        t = 0
+        while m.phase ~= "docked" and m.phase ~= "crashed" and t < 600 do m:update(1 / 120); t = t + 1 / 120 end
+        if m.phase == "crashed" then
+          crashed = crashed + 1
+          print("   crash on the way home: " .. m.result.sub)
+          m:replaceLander()
+        elseif m.phase ~= "docked" then
+          stuck = stuck + 1
+          m:rescue()
+        end
+      end
+    end
+    print(string.format("%-6s delivered %2d/%d  late %d  hard %d  crashed %d  stuck %d | per leg %5.1f s %4.0f kg, pays %4.0f CR | credits %d",
+      w.name, delivered, n, late, hard, crashed, stuck,
+      legT / max(1, delivered), legFuel / max(1, delivered), pay / max(1, delivered), floor(m.credits)))
+  end
+end
+
 function love.load(args)
   args = args or {}
   love.math.setRandomSeed(os.time())
@@ -138,9 +200,18 @@ function love.load(args)
   end
   settings.sanitize(#worlds)
 
+  if hasArg(args, "--autotest") or hasArg(args, "--autotest-missions") then
+    io.stdout:setvbuf("no")
+  end
   if hasArg(args, "--autotest") then
     core.testMode = true
     runAutotest(tonumber(argValue(args, "--autotest")) or 20)
+    love.event.quit()
+    return
+  end
+  if hasArg(args, "--autotest-missions") then
+    core.testMode = true
+    runMissionAutotest(tonumber(argValue(args, "--autotest-missions")) or 6)
     love.event.quit()
     return
   end
@@ -176,9 +247,39 @@ function love.load(args)
       app.startGame(true, shot.world or 1)
     elseif shot.mode == "crash" then
       app.startGame(false, shot.world or 1)   -- nobody at the controls
+    elseif shot.mode == "orbit" or shot.mode == "climb" or shot.mode == "suborbit" then
+      -- arcade lander placed on an orbit / climb / ballistic arc, coasting
+      app.startGame(false, shot.world or 1)
+      local Orbit = require("src.orbit")
+      local L, w = state.lander, state.world
+      local safe = Orbit.safeAltitude(state)
+      if shot.mode == "orbit" then
+        L.y = safe + 2500
+        L.vx = math.sqrt(Orbit.mu(w) / (w.R + L.y)) * 1.04
+        L.vy = 0
+      elseif shot.mode == "climb" then
+        L.y, L.vx, L.vy = 1200, 140, 35
+      else
+        L.y, L.vx, L.vy = 2600, 150, 25
+      end
+      L.a = math.atan2(-L.vx, math.max(L.vy, 1))
+      state.lever = 0
     elseif shot.mode == "pause" then
       app.startGame(false, shot.world or 1)
       state.paused = true
+    elseif shot.mode == "hq" then
+      app.startMission(false, shot.world or 1)
+    elseif shot.mode == "mission" or shot.mode == "damaged" then
+      app.startMission(false, shot.world or 1)
+      if shot.mode == "damaged" then
+        local d = state.dmg
+        d.engine, d.rcs, d.tank, d.gear = 0.45, 0.55, 0.3, 0.25
+        state:updateLimits()
+      end
+      local o = state.offers[1]
+      state:accept(o)
+      state:launch()
+      state.autopilotOn, state.apPad = true, o.base
     elseif shot.mode == "gameover" then
       app.startGame(false, shot.world or 1)
       state.score = 1250
@@ -186,7 +287,9 @@ function love.load(args)
     else
       app.toTitle()
       if shot.mode == "options" then state.menu = "options" end
-      if shot.mode == "howto" then state.menu = "howto" end
+      if shot.mode == "howto" then state.menu, state.page = "howto", tonumber(argValue(args, "--page")) or 1 end
+      if shot.mode == "career" then state.menu = "career" end
+      state.sel = tonumber(argValue(args, "--sel")) or state.sel
     end
   else
     app.toTitle()

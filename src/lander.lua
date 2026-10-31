@@ -1,7 +1,8 @@
 -- The lander: geometry, rigid-body flight physics and vector drawing.
 --
 -- Physics model (SI units, y up, angle counter-clockwise, 0 = upright):
---   * mass m = dry mass + propellant; the lander gets lighter as it burns
+--   * mass m = dry mass + propellant + cargo; the lander gets lighter as
+--     it burns (and when cargo is delivered)
 --   * main engine: thrust F = Fmax * throttle along the body axis, with a
 --     first-order spool lag; propellant flow dm/dt = F / ve (so the rocket
 --     equation emerges naturally from integrating F/m)
@@ -9,7 +10,16 @@
 --     "assisted" mode the stick commands a rotation *rate* and the RCS
 --     nulls it when released; in "manual" mode the stick commands torque
 --   * atmosphere (if any): quadratic drag 1/2 rho Cd A |v_rel| v_rel
---     relative to the wind, plus aerodynamic damping of rotation
+--     relative to the wind, plus aerodynamic damping of rotation; with
+--     env.H the density falls as exp(-altitude / H)
+--   * round body (env.R, arcade): (x, y) are surface arc length and
+--     altitude, vx/vy the tangential/radial velocity. The exact polar
+--     equations add gravity falling off as (R/r)^2, the centripetal term
+--     vx^2/r and the Coriolis term -vx*vy/r. They vanish at landing speeds
+--     but make ~sqrt(gR) sideways a real orbit.
+--   * damage (missions only, lander.dmg = health 0..1 per system):
+--     engine -> less thrust and sputtering; rcs -> weaker jets and a stuck
+--     thruster that makes it drift; tank -> leaks propellant
 -- Integrated with semi-implicit Euler at a fixed 120 Hz by game.lua.
 
 local core = require("src.core")
@@ -65,27 +75,56 @@ function Lander.new(x, y, vx, vy, spec)
   return setmetatable({
     x = x, y = y, vx = vx, vy = vy,
     a = 0, w = 0,            -- angle, angular velocity
-    thr = 0,                 -- actual (spooled) throttle 0..1
+    thr = 0,                 -- spooled throttle 0..1
+    out = 0,                 -- thrust actually produced, as a fraction of Fmax
     rcs = 0,                 -- signed RCS activity -1..1
     Fmax = spec.Fmax,
     torqueMax = spec.torqueMax,
     assisted = spec.assisted,
+    cargo = spec.cargo or 0, -- kg
+    dmg = spec.dmg,          -- nil = undamageable (arcade)
+    sputT = 0,
   }, Lander)
+end
+
+function Lander:mass(fuel) return Lander.DRY + fuel + self.cargo end
+
+-- Fraction of rated thrust a damaged engine can still give.
+function Lander:engineFactor()
+  local d = self.dmg
+  return d and (0.55 + 0.45 * d.engine) or 1
+end
+
+-- Propellant lost through a damaged tank, kg/s.
+function Lander:leakRate()
+  local d = self.dmg
+  if d and d.tank < 0.95 then return (1 - d.tank) * 2.5 end
+  return 0
 end
 
 -- Advance one fixed step. ctl = { thr = 0..1, rot = -1..1 }.
 -- env = { g, rho, windx }. Returns propellant used (kg).
 function Lander:step(dt, ctl, env, fuel)
-  local m = Lander.DRY + fuel
+  local m = self:mass(fuel)
+  local d = self.dmg
   local cmd = fuel > 0 and core.clamp(ctl.thr, 0, 1) or 0
   self.thr = self.thr + (cmd - self.thr) * (1 - exp(-dt / Lander.SPOOL))
   if cmd == 0 and self.thr < 0.003 then self.thr = 0 end
-  local F = self.Fmax * self.thr
-  local used = F / Lander.VE * dt
+  local Fmax = self.Fmax * self:engineFactor()
+  if d and d.engine < 0.7 then
+    -- a damaged engine sputters: irregular dips in thrust
+    self.sputT = self.sputT + dt
+    local s = self.sputT
+    local dip = (0.7 - d.engine) * 1.3 * math.max(0, sin(s * 11.3) * sin(s * 2.9 + 1.3))
+    Fmax = Fmax * (1 - math.min(0.85, dip))
+  end
+  local F = Fmax * self.thr
+  self.out = F / self.Fmax
+  local used = F / Lander.VE * dt + self:leakRate() * dt
 
   -- Attitude control
   local I = m * Lander.K2
-  local tmax = self.torqueMax
+  local tmax = self.torqueMax * (d and (0.35 + 0.65 * d.rcs) or 1)
   local torque
   if self.assisted then
     local target = core.clamp(ctl.rot, -1, 1) * Lander.MAX_RATE
@@ -94,8 +133,12 @@ function Lander:step(dt, ctl, env, fuel)
     torque = core.clamp(ctl.rot, -1, 1) * tmax
     if abs(self.w) > 3 and torque * self.w > 0 then torque = 0 end
   end
+  if d and d.rcs < 0.6 then
+    -- a stuck thruster pushes one way; assisted mode fights it
+    torque = torque + (0.6 - d.rcs) * 0.25 * self.torqueMax * (d.rcsBias or 1)
+  end
   if fuel <= 0 then torque = 0 end
-  self.rcs = torque / tmax
+  self.rcs = core.clamp(torque / tmax, -1, 1)
   if abs(self.rcs) < 0.01 then self.rcs = 0 end
   used = used + abs(self.rcs) * Lander.RCS_FUEL * dt
   self.w = self.w + torque / I * dt
@@ -103,18 +146,37 @@ function Lander:step(dt, ctl, env, fuel)
   -- Translation
   local s, c = sin(self.a), cos(self.a)
   local ax = -s * F / m
-  local ay = c * F / m - env.g
-  if env.rho > 0 then
+  local ay = c * F / m
+  local R = env.R
+  local r
+  if R then
+    r = R + math.max(self.y, -0.5 * R)
+    local gr = env.g * (R / r) ^ 2
+    ay = ay - gr + self.vx * self.vx / r
+    ax = ax - self.vy * self.vx / r
+  else
+    ay = ay - env.g
+  end
+  local rho = env.rho
+  if rho > 0 then
+    if env.H then rho = rho * exp(-math.max(0, self.y) / env.H) end
     local rvx, rvy = self.vx - env.windx, self.vy
     local sp = math.sqrt(rvx * rvx + rvy * rvy)
-    local k = 0.5 * env.rho * Lander.CDA * sp / m
+    local k = 0.5 * rho * Lander.CDA * sp / m
     ax = ax - k * rvx
     ay = ay - k * rvy
-    self.w = self.w * exp(-0.12 * env.rho * dt)
+    self.w = self.w * exp(-0.12 * rho * dt)
   end
   self.vx = self.vx + ax * dt
   self.vy = self.vy + ay * dt
-  self.x = self.x + self.vx * dt
+  if R then
+    self.x = self.x + self.vx * dt * R / r          -- arc length along the surface
+    -- the horizon turns as you travel; an uncontrolled craft keeps its
+    -- inertial attitude (assisted mode holds attitude to the horizon)
+    if not self.assisted then self.a = self.a + self.vx / r * dt end
+  else
+    self.x = self.x + self.vx * dt
+  end
   self.y = self.y + self.vy * dt
   self.a = self.a + self.w * dt
   return used
@@ -186,7 +248,11 @@ function Lander.draw(view, x, y, a, thr, bright)
   local VW, VH = core.VW, core.VH
   local sx0 = VW / 2 + core.wdelta(x - view.cx, view.W) * view.z
   local sy0 = VH / 2 - (y - view.cy) * view.z
-  local z = math.max(view.z, Lander.MIN_DRAW_Z)
+  Lander.drawAt(sx0, sy0, a, math.max(view.z, Lander.MIN_DRAW_Z), thr, bright)
+end
+
+-- Draw the lander centred on screen point (sx0, sy0) at z px per metre.
+function Lander.drawAt(sx0, sy0, a, z, thr, bright)
   local s, c = sin(a), cos(a)
   lg.setLineWidth(core.clamp(z * 0.32, 1.25, 2.1))
   core.setc(bright or 1)

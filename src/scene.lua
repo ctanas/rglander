@@ -33,10 +33,10 @@ function S.terrainScreenY(view, T, sx)
   return core.VH / 2 - (T:height(wx) - view.cy) * view.z
 end
 
--- Stars and sky object; both only drawn where they are above the ground,
--- because the ground is just a line and must look solid.
-function S.drawSky(view, T, world, dim)
-  dim = dim or 1
+-- Stars at infinity (fixed on screen). visible(sx, sy, margin) decides
+-- whether a point is open sky - the ground is only a line, so stars must
+-- not show through it.
+function S.drawStarfield(world, dim, visible)
   if not stars then makeStars() end
   local VW, VH = core.VW, core.VH
   local count = math.floor(#stars * (world.stars or 1))
@@ -48,20 +48,30 @@ function S.drawSky(view, T, world, dim)
       local st = stars[i]
       if st.big == big then
         local sx, sy = st.x * VW, st.y * VH
-        if sy < S.terrainScreenY(view, T, sx) - 4 then
+        if visible(sx, sy, 4) then
           core.setc(st.b * (0.7 + 0.3 * math.sin(t * st.sp + st.ph)) * dim)
           lg.points(sx, sy)
         end
       end
     end
   end
-  if world.sky then
-    local ox, oy = VW * 0.80, VH * 0.26
-    if oy + world.skyR * 2.5 < S.terrainScreenY(view, T, ox) then
-      lg.setLineWidth(1.4)
-      world.sky(ox, oy, world.skyR, dim)
-    end
+end
+
+function S.drawSkyObject(world, dim, visible)
+  if not world.sky then return end
+  local ox, oy = core.VW * 0.80, core.VH * 0.26
+  if visible(ox, oy, world.skyR * 2.5) then
+    lg.setLineWidth(1.4)
+    world.sky(ox, oy, world.skyR, dim)
   end
+end
+
+-- Stars and sky object above the local terrain.
+function S.drawSky(view, T, world, dim)
+  dim = dim or 1
+  local function visible(sx, sy, margin) return sy + margin < S.terrainScreenY(view, T, sx) end
+  S.drawStarfield(world, dim, visible)
+  S.drawSkyObject(world, dim, visible)
 end
 
 function S.drawTerrain(view, T)
@@ -112,7 +122,73 @@ function S.drawPads(view, T, labels, dim)
         local th = core.clamp(z * 1.9, 9, 13)
         core.setc(0.85 * dim)
         lg.setLineWidth(1.3)
-        vfont.draw("X" .. p.mult, sx, sy + 7, th, "center")
+        vfont.draw(p.label or ("X" .. p.mult), sx, sy + 7, th, "center")
+      end
+    end
+  end
+end
+
+-- Buildings at mission sites (HQ hangar, fuel tanks, radio mast; outpost
+-- dome and antenna), drawn in the same schematic line style.
+function S.drawStructures(view, T)
+  local structs = T.structs
+  if not structs then return end
+  local VW, VH, z = core.VW, core.VH, view.z
+  local pi, cos, sin = math.pi, math.cos, math.sin
+  lg.setLineWidth(core.clamp(z * 0.28, 1.1, 1.8))
+  for _, s in ipairs(structs) do
+    local sx = VW / 2 + core.wdelta(s.x - view.cx, T.W) * z
+    local hw, h = s.w / 2 * z, s.h * z
+    if sx + hw > -20 and sx - hw < VW + 20 then
+      local sy = VH / 2 - (s.y - view.cy) * z
+      core.setc(0.8)
+      if s.kind == "hangar" then
+        local wall = h * 0.55
+        local p = { sx - hw, sy, sx - hw, sy - wall }
+        for k = 0, 14 do
+          local t = pi - pi * k / 14
+          p[#p + 1] = sx + cos(t) * hw
+          p[#p + 1] = sy - wall - sin(t) * (h - wall)
+        end
+        p[#p + 1] = sx + hw
+        p[#p + 1] = sy
+        lg.line(p)
+        core.setc(0.45)
+        lg.line(sx - hw * 0.5, sy, sx - hw * 0.5, sy - wall * 0.85, sx + hw * 0.5, sy - wall * 0.85, sx + hw * 0.5, sy)
+        for k = -1, 1 do lg.line(sx + k * hw * 0.5, sy - wall - (h - wall) * 0.15, sx + k * hw * 0.62, sy - wall - (h - wall) * 0.95) end
+      elseif s.kind == "tank" then
+        local top = sy - h + hw
+        lg.line(sx - hw, sy, sx - hw, top)
+        lg.line(sx + hw, sy, sx + hw, top)
+        lg.arc("line", "open", sx, top, hw, pi, 2 * pi, 12)
+        core.setc(0.45)
+        lg.line(sx - hw, sy - h * 0.3, sx + hw, sy - h * 0.3)
+        lg.line(sx - hw, sy - h * 0.6, sx + hw, sy - h * 0.6)
+      elseif s.kind == "mast" then
+        local w2 = math.max(1.5, hw * 1.6)
+        lg.line(sx - w2, sy, sx, sy - h, sx + w2, sy)
+        core.setc(0.45)
+        for k = 1, 4 do
+          local f = k / 5
+          lg.line(sx - w2 * (1 - f), sy - h * f, sx + w2 * (1 - f), sy - h * f)
+        end
+        if (core.time * 1.1) % 1 < 0.5 then
+          core.setc(1)
+          lg.circle("fill", sx, sy - h - 2, 2)
+        end
+      elseif s.kind == "dome" then
+        lg.arc("line", "open", sx, sy, hw, pi, 2 * pi, 24)
+        core.setc(0.45)
+        lg.line(sx - hw * 0.22, sy, sx - hw * 0.22, sy - h * 0.4, sx + hw * 0.22, sy - h * 0.4, sx + hw * 0.22, sy)
+        lg.arc("line", "open", sx, sy, hw * 0.7, pi * 1.15, pi * 1.4, 6)
+        lg.arc("line", "open", sx, sy, hw * 0.7, pi * 1.6, pi * 1.85, 6)
+      elseif s.kind == "antenna" then
+        lg.line(sx, sy, sx, sy - h)
+        lg.arc("line", "open", sx + hw * 1.5, sy - h, hw * 3, pi * 0.75, pi * 1.25, 8)
+        if (core.time * 0.9 + 0.3) % 1 < 0.5 then
+          core.setc(1)
+          lg.circle("fill", sx, sy - h - 1.5, 1.5)
+        end
       end
     end
   end

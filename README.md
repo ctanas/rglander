@@ -3,12 +3,16 @@
 A vector-graphics landing game for LÖVE 11, made for the **Anbernic RG34XXSP**
 (720×480, Allwinner H700), packaged for both muOS and PortMaster. It is an original game in the classic
 lunar-lander genre: monochrome phosphor lines on black, jagged procedural
-terrain, narrow pads that pay more, and fuel as your only life.
+terrain, narrow pads that pay more, and fuel as your only life. A second
+mode, **Missions**, turns it into a cargo-hauling career with damage, refuelling
+and procedural contracts.
 
 | | |
 |---|---|
 | ![Title](screenshots/title.png) | ![Perfect touchdown on the Moon](screenshots/moon_touchdown.png) |
 | ![Final approach on Titan, under Saturn](screenshots/titan_approach.png) | ![Crash on Mars](screenshots/mars_crash.png) |
+| ![Missions: docked at HQ, choosing a contract](screenshots/mission_hq.png) | ![Missions: hauling cargo to an outpost](screenshots/mission_flight.png) |
+| ![Climbing out: the terrain curves away as the view zooms out](screenshots/orbit_climb.png) | ![In lunar orbit, with apoapsis and periapsis marked](screenshots/orbit.png) |
 
 *Screenshots are rendered by the game itself at native 720×480 (`--shot`). The
 green phosphor option is shown in [mars_green.png](screenshots/mars_green.png).*
@@ -56,11 +60,87 @@ game alone is `rglander.love`: `love rglander.love`.
 | X | Set the lever to hover thrust for your current mass |
 | Left stick | Rotate (X) and analog thrust (push up) |
 | R2 / right stick up | Analog thrust |
+| L1/R1 (orbit view) | Time warp down/up |
+| X (orbit view) | Attitude hold: prograde → retrograde → off |
 | Start / Select | Pause |
 | Select + Start | Quit |
 | Y | Toggle FPS counter |
 
 Keyboard (desktop): arrows, Z = A, X = B, C = X, Q/E = L1/R1, Enter = Start, Esc = Select.
+
+## Game modes
+
+### Arcade
+
+A run of landings on fresh terrain until the fuel runs out. Narrow pads pay up to
+×5, crashes cost fuel, and good landings refund some.
+
+### Orbit (in arcade)
+
+Climb past 700 m and the camera zooms smoothly out to the whole world. The
+terrain you were flying over curves into a planet, and your predicted path is
+drawn around it, with apoapsis (AP) and periapsis (PE) marked. Fly sideways fast
+enough and you fall around the body instead of into it: that's an orbit.
+Burn prograde to raise the far side of the orbit and retrograde to lower it. Brake
+until the path meets the ground, fall back below 600 m, and you're in the
+landing view again, as fast as you came in.
+
+- **L1/R1:** time warp ×1 / ×4 / ×16 / ×64, with the engine off. Thrusting or
+  steering drops back to ×1, as does descending below 2.5 km. Warp is limited in thick air.
+- **X:** cycles attitude hold: prograde → retrograde → off.
+- **Rewards:** +250 for a stable orbit above the terrain and the air. Landing after
+  an orbit pays double.
+- **Escape:** reach escape velocity and the lander is lost in space.
+
+It's the same physics as the landing view, not a separate simulator. The flight
+model uses the exact polar equations of motion: gravity falls off as (R/r)², plus
+the centripetal and Coriolis terms. At landing speeds these terms vanish; at
+√(gR) sideways they make you weightless. Air thins exponentially with height.
+
+The bodies are **scaled down**, as in Kerbal Space Program, because real low lunar
+orbit takes about 1.7 km/s and the lander carries about 0.8 km/s. Surface gravity
+stays real:
+
+| World | Radius in game (real) | Orbital speed | Notes |
+|---|---|---|---|
+| Moon | 35 km (1,737 km) | 238 m/s | |
+| Mars | 25 km (3,390 km) | 305 m/s | air thins over a 1 km scale height; the hardest round trip |
+| Titan | 45 km (2,575 km) | 246 m/s | 400 m scale height: costly to climb out, nearly free to aerobrake back |
+| Ceres | 100 km (470 km) | 167 m/s | |
+
+A headless test flies an efficient ascent and powered descent on each world. With
+the standard PILOT tank, a near-perfect round trip to orbit lands with 16% (Moon),
+4% (Mars), 20% (Titan) or 14% (Ceres) of the fuel left. CADET has more margin;
+COMMANDER makes it an expert feat. Fuel carries over between sorties, so an orbit
+attempt is a gamble with the rest of your game.
+
+### Missions
+
+A persistent career on one large world per body (3.84 km, wrapping) with an HQ
+and six outposts named after real places there: Tycho, Jezero, Kraken, Occator and others.
+
+- **Contracts.** Each time you dock at HQ you get three procedural offers. Each one
+  lists the cargo, its mass, the destination outpost, the reward and a deadline.
+  Fragile cargo (`*`) pays more.
+- **Mass.** Cargo is added to the lander's mass, so a 900 kg reactor core
+  makes it noticeably sluggish. The lander gets lighter as fuel burns, and again when
+  the cargo is delivered. The HUD shows total mass live.
+- **HQ services.** Refuel (0.6 CR/kg) and repair (6 CR per percentage point).
+  Press B while landed at HQ to reopen the panel.
+- **Damage.** A hard landing always hurts the landing gear, plus one random system:
+  - **Engine:** less thrust, and it sputters below 70%.
+  - **RCS:** weaker jets, and a stuck thruster below 60% makes the lander drift.
+  - **Tank:** leaks propellant (you can see it venting).
+  - **Gear:** the touchdown limits tighten, down to 55%.
+- **Pay.** A late delivery pays half. A hard landing ruins fragile cargo (30% pay)
+  and shaves 15% off the rest. A perfect landing earns a 10% bonus.
+- **Failure.** If you run out of fuel at an outpost, or are too heavy for a damaged
+  engine, a rescue tows you home for 400 CR. A crash costs a 1500 CR replacement
+  lander, and the cargo is lost. If you can't pay, the career ends.
+- **Saving.** The career is saved every time you dock at HQ. *Missions* on the title
+  screen offers *Continue career* or *New career*, one save per world.
+
+The buildings at HQ and the outposts are solid: flying into one counts as a crash.
 
 ## Physics
 
@@ -123,9 +203,12 @@ The version comes from `VERSION` in `src/core.lua`. The game's developer flags:
 
 ```sh
 love . --autotest 40                      # same as ./build.sh test 40
+love . --autotest-missions 6              # autopilot flies 6 round-trip contracts per world
 love . --shot NAME --mode game --world 3 --time 20 --turbo 4 --seed 9
                                           # saves NAME.png to the LÖVE save dir
                                           # modes: title options howto game crash pause gameover
+                                          #        hq mission damaged (missions)
+                                          #        orbit climb suborbit (orbital view)
 love . --shot x --mode title --opt phosphor=2 --opt aspect=2   # test-only setting overrides
 ```
 
@@ -134,7 +217,9 @@ Test runs never write to the settings file.
 ```
 main.lua        window, render pipeline (scene → bloom → screen), test harness
 conf.lua        LÖVE config
-src/game.lua    sorties, camera, contact/touchdown, scoring, debris, autopilot
+src/game.lua    arcade mode: sorties, camera, contact/touchdown, scoring, debris, autopilot
+src/mission.lua missions mode (extends game.lua): contracts, HQ, damage, economy, saves
+src/orbit.lua   orbital view: Kepler elements, zooming camera, planet and orbit drawing
 src/lander.lua  geometry, flight physics, drawing
 src/terrain.lua periodic midpoint-displacement terrain, craters, pads
 src/hud.lua     instruments, attitude/velocity gauge, messages

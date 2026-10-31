@@ -10,13 +10,15 @@ local worlds = require("src.worlds")
 local Terrain = require("src.terrain")
 local scene = require("src.scene")
 local Game = require("src.game")
+local Mission = require("src.mission")
 local lg = love.graphics
 
 local Title = {}
 Title.__index = Title
 
 local MAIN = {
-  { id = "start", label = "START MISSION" },
+  { id = "start", label = "ARCADE" },
+  { id = "missions", label = "MISSIONS" },
   { id = "world", label = "WORLD" },
   { id = "rating", label = "RATING" },
   { id = "options", label = "OPTIONS" },
@@ -33,6 +35,14 @@ local OPTIONS = {
   { id = "sound", label = "SOUND", help = "PROCEDURAL ENGINE RUMBLE, RCS HISS AND ALARMS" },
   { id = "back", label = "BACK" },
 }
+
+local CAREER = {
+  { id = "continue", label = "CONTINUE CAREER" },
+  { id = "newcareer", label = "NEW CAREER", help = "STARTS OVER - THE SAVED CAREER ON THIS WORLD IS REPLACED" },
+  { id = "careerback", label = "BACK" },
+}
+
+local MENUS = { main = MAIN, options = OPTIONS, career = CAREER }
 
 local IDLE_DEMO = 30
 
@@ -86,16 +96,32 @@ function Title:activate(id)
   if id == "start" then
     audio.play("blip")
     self.app.startGame(false)
+  elseif id == "missions" then
+    audio.play("blip")
+    if Mission.saveInfo(worlds[settings.data.world].id) then
+      self.menu, self.sel = "career", 1
+    else
+      self.app.startMission(false)
+    end
+  elseif id == "continue" then
+    audio.play("blip")
+    self.app.startMission(true)
+  elseif id == "newcareer" then
+    audio.play("blip")
+    self.app.startMission(false)
+  elseif id == "careerback" then
+    self.menu, self.sel = "main", 2
+    audio.play("blip")
   elseif id == "options" then
     self.menu, self.sel = "options", 1
     audio.play("blip")
   elseif id == "howto" then
-    self.menu = "howto"
+    self.menu, self.page = "howto", 1
     audio.play("blip")
   elseif id == "quit" then
     love.event.quit()
   elseif id == "back" then
-    self.menu, self.sel = "main", 4
+    self.menu, self.sel = "main", 5
     audio.play("blip")
   else
     self:change(id, 1)
@@ -111,26 +137,92 @@ function Title:update(dt)
   if self.idle > IDLE_DEMO then return self.app.startGame(true) end
 
   if self.menu == "howto" then
-    if I.pressed.a or I.pressed.b or I.pressed.start or I.pressed.select then
+    if I.nav("left") or I.nav("right") then
+      self.page = ((self.page or 1) - 1 + (I.nav("right") and 1 or -1)) % 3 + 1
+      audio.play("blip")
+    elseif I.pressed.a or I.pressed.b or I.pressed.start or I.pressed.select then
       self.menu = "main"
       audio.play("blip")
     end
     return
   end
 
-  local items = self.menu == "main" and MAIN or OPTIONS
+  local items = MENUS[self.menu]
   if I.nav("up") then self.sel = (self.sel - 2) % #items + 1; audio.play("blip") end
   if I.nav("down") then self.sel = self.sel % #items + 1; audio.play("blip") end
   local id = items[self.sel].id
   if I.nav("left") then self:change(id, -1) elseif I.nav("right") then self:change(id, 1) end
   if I.pressed.a or I.pressed.start then self:activate(id) end
-  if (I.pressed.b or I.pressed.select) and self.menu == "options" then
-    self.menu, self.sel = "main", 4
+  if (I.pressed.b or I.pressed.select) and self.menu ~= "main" then
+    self.menu, self.sel = "main", self.menu == "career" and 2 or 5
     audio.play("blip")
   end
 end
 
+local MISSION_HELP = {
+  "TAKE A CONTRACT AT HQ AND DELIVER THE CARGO TO AN OUTPOST.",
+  "CARGO ADDS MASS - A HEAVY LOAD MAKES THE LANDER SLUGGISH.",
+  "FUEL BURNS OFF AS YOU FLY, SO THE LANDER GETS LIGHTER.",
+  "REFUEL AND REPAIR AT HQ. BOTH COST CREDITS.",
+  "",
+  "HARD LANDINGS DAMAGE THE GEAR AND ONE OTHER SYSTEM:",
+  "ENGINE - LESS THRUST, SPUTTERS      RCS - WEAKER, DRIFTS",
+  "TANK - LEAKS FUEL      GEAR - TIGHTER LANDING LIMITS",
+  "",
+  "LATE DELIVERIES PAY HALF. A HARD LANDING RUINS FRAGILE CARGO.",
+  "OUT OF FUEL AT AN OUTPOST? A RESCUE TOWS YOU HOME, FOR A FEE.",
+  "A CRASH COSTS A NEW LANDER. NO CREDITS LEFT - CAREER OVER.",
+  "THE CAREER IS SAVED EVERY TIME YOU DOCK AT HQ.",
+}
+
+local ORBIT_HELP = {
+  "ARCADE: CLIMB PAST 700 M AND THE VIEW ZOOMS OUT TO THE WHOLE WORLD.",
+  "FLY SIDEWAYS FAST ENOUGH AND YOU FALL AROUND IT - AN ORBIT.",
+  "THE LINE IS YOUR PATH. AP AND PE MARK ITS HIGHEST AND LOWEST POINTS.",
+  "BURN PROGRADE TO RAISE THE FAR SIDE, RETROGRADE TO LOWER IT.",
+  "BRAKE UNTIL THE PATH MEETS THE GROUND, THEN LAND AS USUAL.",
+  "",
+  "L1/R1 - TIME WARP (ENGINE OFF)     X - HOLD PROGRADE / RETROGRADE",
+  "",
+  "ORBIT BONUS +250. LANDING AFTER AN ORBIT PAYS DOUBLE.",
+  "TITAN'S THICK AIR IS HARD TO CLIMB THROUGH, BUT BRAKES YOU FOR FREE.",
+  "THE WORLDS ARE SCALED DOWN SO ORBIT IS WITHIN THE LANDER'S REACH.",
+  "IT TAKES MOST OF A FULL TANK: GO EARLY, FLY CLEAN.",
+}
+
+function Title:drawOrbitHelp()
+  local VW = core.VW
+  lg.setColor(0, 0, 0, 0.88)
+  lg.rectangle("fill", VW / 2 - 316, 122, 632, 268)
+  lg.setLineWidth(1.3)
+  core.setc(1)
+  vfont.draw("ORBIT", VW / 2, 130, 12, "center")
+  local y = 154
+  for _, line in ipairs(ORBIT_HELP) do
+    core.setc(0.85)
+    if line ~= "" then vfont.draw(line, VW / 2, y, 9, "center") end
+    y = y + (line == "" and 8 or 17)
+  end
+end
+
+function Title:drawMissionHelp()
+  local VW = core.VW
+  lg.setColor(0, 0, 0, 0.88)
+  lg.rectangle("fill", VW / 2 - 316, 122, 632, 268)
+  lg.setLineWidth(1.3)
+  core.setc(1)
+  vfont.draw("MISSIONS", VW / 2, 130, 12, "center")
+  local y = 154
+  for _, line in ipairs(MISSION_HELP) do
+    core.setc(0.85)
+    if line ~= "" then vfont.draw(line, VW / 2, y, 9, "center") end
+    y = y + (line == "" and 8 or 17)
+  end
+end
+
 function Title:drawHowto()
+  if self.page == 2 then return self:drawMissionHelp() end
+  if self.page == 3 then return self:drawOrbitHelp() end
   local VW = core.VW
   local lim = Game.GRADES
   local r = Game.RATINGS[settings.data.rating]
@@ -201,13 +293,13 @@ function Title:draw()
     self:drawHowto()
     if (core.time * 1.6) % 1 < 0.6 then
       core.setc(0.5)
-      vfont.draw("PRESS A", VW / 2, VH - 40, 10, "center")
+      vfont.draw(string.format("< PAGE %d/3 >   A TO RETURN", self.page or 1), VW / 2, VH - 40, 10, "center")
     end
     return
   end
 
-  local items = self.menu == "main" and MAIN or OPTIONS
-  local y0, dy, th = 142, 27, 14
+  local items = MENUS[self.menu]
+  local y0, dy, th = 140, 25, 14
   for i, it in ipairs(items) do
     local y = y0 + (i - 1) * dy
     local sel = i == self.sel
@@ -232,10 +324,17 @@ function Title:draw()
     core.setc(0.7)
     vfont.draw(w.blurb, VW / 2, iy, 10, "center")
     core.setc(0.45)
-    vfont.draw(string.format("G %.2f M/S2  -  %s  -  BEST %05d", w.g, w.atmo,
-      settings.hiscores[w.id] or 0), VW / 2, iy + 17, 9, "center")
+    local info
+    local career = Mission.saveInfo(w.id)
+    if items[self.sel].id == "missions" then
+      info = career and string.format("SAVED CAREER: %d DELIVERIES - %d CR", career.deliveries, career.credits)
+        or string.format("CARGO RUNS ON %s - BEST CAREER %d CR", w.name, settings.hiscores["m_" .. w.id] or 0)
+    else
+      info = string.format("G %.2f M/S2  -  %s  -  BEST %05d", w.g, w.atmo, settings.hiscores[w.id] or 0)
+    end
+    vfont.draw(info, VW / 2, iy + 17, 9, "center")
   else
-    local help = OPTIONS[self.sel].help
+    local help = items[self.sel].help
     if help then
       core.setc(0.6)
       vfont.draw(help, VW / 2, iy, 9, "center")

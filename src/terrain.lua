@@ -1,6 +1,13 @@
 -- Procedural, horizontally wrapping terrain: a periodic midpoint-
 -- displacement heightfield with craters, plus flat landing pads whose
 -- score multiplier grows as they get narrower.
+--
+-- opts (all optional):
+--   width  world width in metres (multiple of 160; default 1280)
+--   sites  list of pad specs { w, flat, kind, label, name, mult } placed one
+--          per sector; `flat` adds level shoulders either side of the pad
+--          (where missions put buildings). Without sites, arcade pads with
+--          x2..x5 multipliers are made from world.pads.
 
 local core = require("src.core")
 
@@ -11,10 +18,12 @@ local WIDTH = 1280        -- metres; the world wraps around
 local SAMPLES = 128       -- one vertex every 10 m
 local PAD_WIDTH = { [2] = 24, [3] = 18, [4] = 14, [5] = 11 }
 
-function Terrain.new(world, seed)
+function Terrain.new(world, seed, opts)
+  opts = opts or {}
   local rng = love.math.newRandomGenerator(seed)
-  local self = setmetatable({ W = WIDTH }, Terrain)
-  local N, dx = SAMPLES, WIDTH / SAMPLES
+  local width = opts.width or WIDTH
+  local self = setmetatable({ W = width }, Terrain)
+  local N, dx = math.floor(width / (WIDTH / SAMPLES)), WIDTH / SAMPLES
   local relief, rough = world.relief, world.rough
   local function rnd() return rng:random() * 2 - 1 end
 
@@ -65,40 +74,51 @@ function Terrain.new(world, seed)
     return a + (b - a) * t
   end
 
-  -- Landing pads, one per sector, in shuffled order.
-  local mults = {}
-  for i, m in ipairs(world.pads or { 2, 2, 3, 4, 5 }) do mults[i] = m end
-  for i = #mults, 2, -1 do
-    local j = rng:random(1, i)
-    mults[i], mults[j] = mults[j], mults[i]
+  -- Landing sites, one per sector.
+  local specs = opts.sites
+  if not specs then
+    local mults = {}
+    for i, m in ipairs(world.pads or { 2, 2, 3, 4, 5 }) do mults[i] = m end
+    for i = #mults, 2, -1 do
+      local j = rng:random(1, i)
+      mults[i], mults[j] = mults[j], mults[i]
+    end
+    specs = {}
+    for i, m in ipairs(mults) do specs[i] = { w = PAD_WIDTH[m] or 18, mult = m } end
   end
-  local K = #mults
-  local sector = WIDTH / K
+  local K = #specs
+  local sector = width / K
   local pads = {}
-  for i = 1, K do
-    local m = mults[i]
-    local w = PAD_WIDTH[m] or 18
+  for i, sp in ipairs(specs) do
+    local w, flat = sp.w, sp.flat or 0
+    local span = w + 2 * flat
     local margin = 30
-    local cx = (i - 1) * sector + margin + w / 2 + rng:random() * (sector - 2 * margin - w)
-    local x0, x1 = cx - w / 2, cx + w / 2
+    local cx = (i - 1) * sector + margin + span / 2 + rng:random() * (sector - 2 * margin - span)
     local sum, cnt = 0, 0
-    for xx = x0, x1, 2 do sum = sum + baseAt(xx); cnt = cnt + 1 end
-    pads[i] = { x0 = x0, x1 = x1, cx = cx, w = w, y = sum / cnt, mult = m }
+    for xx = cx - span / 2, cx + span / 2, 2 do sum = sum + baseAt(xx); cnt = cnt + 1 end
+    pads[i] = {
+      x0 = cx - w / 2, x1 = cx + w / 2, cx = cx, w = w, y = sum / cnt, flat = flat,
+      mult = sp.mult or 1, kind = sp.kind, label = sp.label, name = sp.name,
+    }
   end
 
-  -- Vertex list: base samples outside pads + pad end points.
+  -- Vertex list: base samples outside the sites + site end points.
   local verts = {}
   for i = 0, N - 1 do
     local x = i * dx
     local inside = false
     for _, p in ipairs(pads) do
-      if x >= p.x0 - 3 and x <= p.x1 + 3 then inside = true; break end
+      if x >= p.x0 - p.flat - 3 and x <= p.x1 + p.flat + 3 then inside = true; break end
     end
     if not inside then verts[#verts + 1] = { x, h[i] } end
   end
   for _, p in ipairs(pads) do
     verts[#verts + 1] = { p.x0, p.y }
     verts[#verts + 1] = { p.x1, p.y }
+    if p.flat > 0 then
+      verts[#verts + 1] = { p.x0 - p.flat, p.y }
+      verts[#verts + 1] = { p.x1 + p.flat, p.y }
+    end
   end
   table.sort(verts, function(a, b) return a[1] < b[1] end)
 
@@ -111,7 +131,40 @@ function Terrain.new(world, seed)
   self.n = #verts
   self.pads = pads
   self.maxH = maxH
+
+  -- Buildings on the level shoulders of HQ and outposts. They are solid:
+  -- each is also a collision box [x - w/2, x + w/2] x [y, y + h].
+  local structs = {}
+  local function add(kind, x, y, w, hgt, name)
+    structs[#structs + 1] = { kind = kind, x = core.wrap(x, width), y = y, w = w, h = hgt, name = name }
+  end
+  for _, p in ipairs(pads) do
+    if p.kind == "hq" then
+      add("hangar", p.x0 - p.flat * 0.5, p.y, 15, 7, "THE HANGAR")
+      add("tank", p.x1 + 6, p.y, 4.5, 6, "A FUEL TANK")
+      add("tank", p.x1 + 12, p.y, 4.5, 6, "A FUEL TANK")
+      add("mast", p.x1 + 20, p.y, 1.2, 15, "THE RADIO MAST")
+    elseif p.kind == "base" then
+      local left = rng:random() < 0.5
+      add("dome", left and p.x0 - 7.5 or p.x1 + 7.5, p.y, 10, 5, "A HABITAT DOME")
+      add("antenna", left and p.x1 + 8 or p.x0 - 8, p.y, 1.2, 9, "AN ANTENNA")
+    end
+  end
+  self.structs = #structs > 0 and structs or nil
   return self
+end
+
+-- Building containing world point (x, y), if any.
+function Terrain:structAt(x, y)
+  local structs = self.structs
+  if not structs then return nil end
+  for i = 1, #structs do
+    local s = structs[i]
+    if y >= s.y and y <= s.y + s.h and math.abs(core.wdelta(x - s.x, self.W)) <= s.w / 2 then
+      return s
+    end
+  end
+  return nil
 end
 
 -- Largest i with xs[i] <= x (x already wrapped), or 0 if x < xs[1].

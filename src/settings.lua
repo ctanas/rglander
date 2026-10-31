@@ -53,6 +53,32 @@ function S.sanitize(nworlds)
   d.aspect = int(d.aspect, 1, 2, 1)
 end
 
+-- Generic key=value files (used for mission careers). Values are strings.
+function S.readKV(file)
+  if not love.filesystem.getInfo(file) then return nil end
+  local ok, content = pcall(love.filesystem.read, file)
+  if not ok or type(content) ~= "string" then return nil end
+  local t = {}
+  for line in content:gmatch("[^\r\n]+") do
+    local k, v = line:match("^([%w_]+)%s*=%s*(.-)%s*$")
+    if k then t[k] = v end
+  end
+  return t
+end
+
+function S.writeKV(file, t)
+  if require("src.core").testMode then return end
+  local out = {}
+  for k, v in pairs(t) do out[#out + 1] = k .. "=" .. tostring(v) end
+  table.sort(out)
+  pcall(love.filesystem.write, file, table.concat(out, "\n") .. "\n")
+end
+
+function S.remove(file)
+  if require("src.core").testMode then return end
+  pcall(love.filesystem.remove, file)
+end
+
 function S.save()
   if require("src.core").testMode then return end
   local out = {}
