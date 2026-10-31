@@ -1,7 +1,7 @@
 -- Shared state and small helpers used by every module.
 
 local core = {
-  VERSION = "0.1.0",
+  VERSION = "0.1.1",
   VW = 720,          -- logical screen width  (720 for 3:2 panels, 640 for 4:3)
   VH = 480,          -- logical screen height
   col = { 0.86, 0.93, 1.0 },  -- current phosphor colour
